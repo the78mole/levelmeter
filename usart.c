@@ -18,7 +18,7 @@ usart Related
 void usart_init(void) {
 	UBRR1 = 207; // UBRR_VALUE;
 	UCSR1A |= (1 << U2X1);
-	UCSR1B = (1 << RXEN1) | (1 << TXEN1);
+	UCSR1B = (1 << RXCIE1) | (1 << RXEN1) | (1 << TXEN1);
 	UCSR1C = (1 << UCSZ11) | (1 << UCSZ10);
 
 	// hier weitere Initialisierungen (TX und/oder RX aktivieren, Modus setzen
