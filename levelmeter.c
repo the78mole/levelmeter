@@ -42,6 +42,7 @@
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
 #include <avr/wdt.h>
+#include <avr/sleep.h>
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -80,6 +81,9 @@ volatile uint32_t total_time = 0;
 #define MEASLEDON PORTB &= ~(1 << PB0)
 #define MEASLEDOFF PORTB |= (1 << PB0)
 
+#define SLEEPLEDON PORTB &= ~(1 << PB3)
+#define SLEEPLEDOFF PORTB |= (1 << PB3)
+
 const double ticks_to_mm = (2.0 * F_CPU) / (340.0 * 1000.0);
 
 static inline void gen_meas_trigger(void)
@@ -103,7 +107,7 @@ void ports_init(void) {
 	DDRC |= 1 << PC6; // US-Trigger
 	DDRB |= 1 << PB6; // LED1 -> USART RX
 	DDRB |= 1 << PB2; // LED2 -> Capture
-	DDRB |= 1 << PB3; // LED3 -> Overflow
+	DDRB |= 1 << PB3; // LED3 -> Sleep
 
 	// Initialize trigger as high
 	//PORTC |= 1 << PC6;
@@ -127,31 +131,34 @@ int main(void) {
 
 	ports_init();
 
+	set_sleep_mode(SLEEP_MODE_IDLE);
+
 	UDIEN = 0; // Disable the USB interrupts
 	USBCON = (1 << FRZCLK); // Disable USB core
 
 	sei(); // Enable global interrupt
 
 	printf("# [%02x] Init...\n", cmd_addr);
-	printf("# [%02x] Tick to mm div: ~%d\n", cmd_addr, (int) ticks_to_mm);
+	printf("# [%02x] Tick to mm div: approx. %d\n", cmd_addr, (int) ticks_to_mm);
 
 	while (1) {
 
+		SLEEPLEDOFF;
 		if (measurement_state == MEAS_REQUESTED)
 		{
-				MEASLEDON;
-				printf("# [%02x] Measurement requested.\n", cmd_addr);
-				// Clear all timer flags
-				TIFR1 = (1 << ICF1) | (1 << OCF1A);
+			MEASLEDON;
+			printf("# [%02x] Measurement requested.\n", cmd_addr);
+			// Clear all timer flags
+			TIFR1 = (1 << ICF1) | (1 << OCF1A);
 
-				measurement_state = MEAS_WAIT_START;
-				// Enable the timer interrupts
-				TIMSK1 |= (1 << ICIE1);
-				// Set rising edge for input capture and 1/1 prescale
-				TCCR1B |= (1 << ICES3);
-				// Generate the trigger signal
-				tof_count = 0;
-				gen_meas_trigger();
+			measurement_state = MEAS_WAIT_START;
+			// Enable the timer interrupts
+			TIMSK1 |= (1 << ICIE1);
+			// Set rising edge for input capture and 1/1 prescale
+			TCCR1B |= (1 << ICES3);
+			// Generate the trigger signal
+			tof_count = 0;
+			gen_meas_trigger();
 		}
 		else if (measurement_state == MEAS_DONE)
 		{
@@ -176,8 +183,9 @@ int main(void) {
 		}
 		else if (measurement_state == MEAS_SLEEP)
 		{
-			PORTB |= LEDS_OFF;
+			SLEEPLEDON;
 			// Set uC to sleep with active RX IRQ
+			sleep_mode();
 		}
 		else if (measurement_state == MEAS_RESET) {
 			printf("# [%02x] Resetting in 250 ms\n", cmd_addr);
