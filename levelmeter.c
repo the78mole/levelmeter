@@ -8,13 +8,19 @@
 #include <util/delay.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <avr/eeprom.h>
+#include <avr/wdt.h>
 #include <stdlib.h>
 #include <stdio.h>
 
 #include "usart.h"
 #include "timer.h"
 
-#define CMD_ADDR 'a'
+//#define CMD_ADDR 'a'
+
+uint8_t CMD_ADDR_EE EEMEM = 'a';
+
+volatile uint8_t cmd_addr;
 
 static FILE mystdout = FDEV_SETUP_STREAM(usart_putchar_printf, NULL, _FDEV_SETUP_WRITE);
 
@@ -24,6 +30,7 @@ const uint8_t MEAS_REQUESTED = 1;
 const uint8_t MEAS_WAIT_START = 2;
 const uint8_t MEAS_WAIT_END = 3;
 const uint8_t MEAS_DONE = 4;
+const uint8_t MEAS_RESET = 0xFE;
 
 volatile uint16_t ts_start;
 volatile uint16_t ts_end;
@@ -40,6 +47,8 @@ volatile uint32_t total_time = 0;
 
 #define MEASLEDON PORTB &= ~(1 << PB0)
 #define MEASLEDOFF PORTB |= (1 << PB0)
+
+const double ticks_to_mm = (2.0 * F_CPU) / (340.0 * 1000.0);
 
 static inline void gen_meas_trigger(void)
 {
@@ -69,6 +78,8 @@ int main(void) {
 
 	stdout = &mystdout;
 
+	cmd_addr = eeprom_read_byte(&CMD_ADDR_EE);
+
 	usart_init();
 
 	timer_init();
@@ -80,14 +91,15 @@ int main(void) {
 
 	sei(); // Enable global interrupt
 
-	printf("# Init...\n");
+	printf("# [%02x] Init...\n", cmd_addr);
+	printf("# [%02x] Tick to mm div: ~%d\n", cmd_addr, (int) ticks_to_mm);
 
 	while (1) {
 
 		if (measurement_state == MEAS_REQUESTED)
 		{
 				MEASLEDON;
-				printf("# Measurement requested.\n");
+				printf("# [%02x] Measurement requested.\n", cmd_addr);
 				// Clear all timer flags
 				TIFR1 = (1 << ICF1) | (1 << OCF1A);
 
@@ -102,7 +114,7 @@ int main(void) {
 		}
 		else if (measurement_state == MEAS_DONE)
 		{
-			printf("# Measurement done.\n");
+			printf("# [%02x] Measurement done.\n", cmd_addr);
 			// Do the calculations
 			total_time = ts_end - ts_start;
 /*			if (tof_count > 0)
@@ -115,19 +127,16 @@ int main(void) {
 			total_time += tof_count * UINT16_MAX;
 
 			// Send result over serial port
-			printf("#  Timer start : %u\n", ts_start);
-			printf("#  Timer end   : %u\n", ts_end);
-			printf("#  Timer oflows: %u\n", tof_count);
-			printf("#  Timer diff  : %u\n", ts_end - ts_start);
-			printf("#  Timer total : %lu\n", total_time);
+			printf("# [%02x]  Timer start : %u\n", cmd_addr, ts_start);
+			printf("# [%02x]  Timer end   : %u\n", cmd_addr, ts_end);
+			printf("# [%02x]  Timer oflows: %u\n", cmd_addr, tof_count);
+			printf("# [%02x]  Timer diff  : %u\n", cmd_addr, ts_end - ts_start);
+			printf("# [%02x]  Timer total : %lu\n", cmd_addr, total_time);
 
 			// Convert to tenth of milli-meters
-			total_time *= 34; 				// speed of sound in meters per tenth sec
-			total_time /= 2;				// Forth and back travel of wave
-			total_time *= 10;				// tenth to seconds
-			total_time /= (F_CPU / 10000); 	// Count frequency in kHz
+			total_time = total_time / ticks_to_mm;
 
-			printf("RESULT [%c] : %lu.%d mm\n", CMD_ADDR, total_time / 10, total_time % 10);
+			printf("RESULT [%02x] : %lu mm\n", cmd_addr, total_time);
 			measurement_state = MEAS_SLEEP;
 			MEASLEDOFF; // Deactivate Measurement LED
 		}
@@ -136,9 +145,17 @@ int main(void) {
 			PORTB |= LEDS_OFF;
 			// Set uC to sleep with active RX IRQ
 		}
+		else if (measurement_state == MEAS_RESET) {
+			printf("# [%02x] Resetting in 250 ms\n", cmd_addr);
+			wdt_enable(WDTO_250MS);
+			cli();
+			while(1);
+		}
 
 	}
 }
+
+char last_rx[3] = {0,0,0};
 
 ISR(USART1_RX_vect)
 {
@@ -148,9 +165,18 @@ ISR(USART1_RX_vect)
 	RXLEDON;
 
 	ctmp = UDR1;
-	if (ctmp == CMD_ADDR) {
+	if (last_rx[0] == 'r' && last_rx[1] == 's' && last_rx[2] == 't' && ctmp == cmd_addr)
+	{
+			measurement_state = MEAS_RESET;
+	}
+	else if (ctmp == cmd_addr)
+	{
 		measurement_state = MEAS_REQUESTED;
 	}
+
+	last_rx[0] = last_rx[1];
+	last_rx[1] = last_rx[2];
+	last_rx[2] = ctmp;
 
 	RXLEDOFF;
 }
