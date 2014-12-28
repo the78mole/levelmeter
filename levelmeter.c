@@ -14,7 +14,6 @@
 #include <stdio.h>
 
 #include "usart.h"
-#include "timer.h"
 
 //#define CMD_ADDR 'a'
 
@@ -55,6 +54,14 @@ static inline void gen_meas_trigger(void)
 	PORTC |= 1 << PC6;
 	_delay_us(100);
 	PORTC &= ~(1 << PC6);
+}
+
+void timer_init() {
+	TCCR1A = 0x00;
+	// Set prescaler to 1
+	TCCR1B |= (1 << CS10);
+	// Enable the timer capture interrupt
+	TCCR1C = 0x00;
 }
 
 void ports_init(void) {
