@@ -3,6 +3,38 @@
  *
  *  Created on: 23.12.2014
  *      Author: daniel
+ *
+ * The levelmeter connects via serial interface to some PC
+ * running an application that instructs the controller to
+ * do a distance measurment. It could be connected to some
+ * serial multi slave bus (e.g. RS485). Default baid rate
+ * is 9600 bit/s.
+ *
+ * Following commands are available:
+ * dm<ADDR>  : Do measurement
+ * rst<ADDR> : Hard-Reset the device
+ *
+ * <ADDR> must be replaced by the address programmed in
+ * EEPROM to take effect.
+ *
+ * To try it out with default address, simply connect a
+ * serial terminal (e.g. Putty, minicom, hyperterm,...) to
+ * the device with 9600 8N1 and type "dma". The result of
+ * the measurement will be printed on the terminal
+ * together with some additional information. All lines
+ * preceeded with "#" can be ignored by the application.
+ *
+ * The result of the measurment will be transmitted with
+ * following format:
+ * "RESULT [<HEXADDR>] : <MEASVALUE> mm"
+ *
+ * Values in square brackets (e.g. [61]) return the
+ * devices address in hex format ('a' == 0x61) to easier
+ * trace back of information.
+ *
+ * Issuing "rsta" will reset the device with address 'a'
+ * and makes it possible to upgrade the firmware over USB
+ * within a few seconds after the reset.
  */
 
 #include <util/delay.h>
@@ -15,7 +47,8 @@
 
 #include "usart.h"
 
-//#define CMD_ADDR 'a'
+uint16_t bootKey = 0x7777;
+uint16_t *const bootKeyPtr = (uint16_t *)0x0800;
 
 uint8_t CMD_ADDR_EE EEMEM = 'a';
 
@@ -85,6 +118,7 @@ int main(void) {
 
 	stdout = &mystdout;
 
+	// Load serial address from EEPROM
 	cmd_addr = eeprom_read_byte(&CMD_ADDR_EE);
 
 	usart_init();
@@ -124,13 +158,6 @@ int main(void) {
 			printf("# [%02x] Measurement done.\n", cmd_addr);
 			// Do the calculations
 			total_time = ts_end - ts_start;
-/*			if (tof_count > 0)
-			{
-				if (ts_start < ts_end)
-					tof_count--;
-
-				total_time += ((uint32_t) tof_count - 1) * ((uint32_t) UINT16_MAX);
-			} */
 			total_time += tof_count * UINT16_MAX;
 
 			// Send result over serial port
@@ -154,6 +181,8 @@ int main(void) {
 		}
 		else if (measurement_state == MEAS_RESET) {
 			printf("# [%02x] Resetting in 250 ms\n", cmd_addr);
+			// Magic key for bootloader mode
+			*bootKeyPtr = bootKey;
 			wdt_enable(WDTO_250MS);
 			cli();
 			while(1);
@@ -176,7 +205,7 @@ ISR(USART1_RX_vect)
 	{
 			measurement_state = MEAS_RESET;
 	}
-	else if (ctmp == cmd_addr)
+	else if (last_rx[1] == 'd' && last_rx[2] == 'm' && ctmp == cmd_addr)
 	{
 		measurement_state = MEAS_REQUESTED;
 	}
